@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.5, user-scalable=yes">
-    <title>公司员工薪资看板 · 月度差异分析</title>
+    <title>公司员工薪资看板 · 多粒度差异分析</title>
     <!-- 使用 ECharts 5 -->
     <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
     <style>
@@ -74,6 +74,58 @@
             border-color: #3b82f6;
             box-shadow: 0 0 0 3px rgba(59,130,246,0.1);
         }
+
+        /* 时间粒度标签页 */
+        .granularity-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+        .granularity-tabs .tab {
+            padding: 8px 16px;
+            border-radius: 12px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #64748b;
+            background: #f1f5f9;
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, border-color 0.2s;
+        }
+        .granularity-tabs .tab:hover {
+            background: #e2e8f0;
+            color: #334155;
+        }
+        .granularity-tabs .tab.active {
+            background: white;
+            color: #0284c7;
+            border-color: #e2e8f0;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+        }
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .breadcrumb {
+            font-size: 0.85rem;
+            color: #64748b;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .breadcrumb span {
+            color: #94a3b8;
+        }
+        .breadcrumb .link {
+            color: #0284c7;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .breadcrumb .link:hover { text-decoration: underline; }
 
         /* 卡片网格：4个关键指标 */
         .kpi-grid {
@@ -242,22 +294,31 @@
     <div class="header">
         <div class="title-section">
             <h1>公司员工薪资看板</h1>
-            <div class="subtitle">月度差异分析及原因总结 · 总人数 54 人 · 5 个部门</div>
+            <div class="subtitle">多粒度差异分析及原因总结 · 总人数 54 人 · 5 个部门</div>
         </div>
-        <div class="month-selector">
-            <select id="monthSelect" aria-label="选择月份"></select>
+        <div class="header-actions">
+            <div class="month-selector">
+                <select id="periodSelect" aria-label="选择时间周期"></select>
+            </div>
         </div>
+    </div>
+    <div class="breadcrumb" id="breadcrumb"></div>
+    <div class="granularity-tabs" id="granularityTabs">
+        <button type="button" class="tab" data-gran="year">年度</button>
+        <button type="button" class="tab" data-gran="half">半年度</button>
+        <button type="button" class="tab" data-gran="quarter">季度</button>
+        <button type="button" class="tab active" data-gran="month">月度</button>
     </div>
 
     <!-- 4个关键指标卡片 -->
     <div class="kpi-grid" id="kpiCards">
         <div class="kpi-card" id="cardTotal">
-            <div class="kpi-label">当月总薪资</div>
+            <div class="kpi-label" id="kpiLabelTotal">当期总薪资</div>
             <div class="kpi-value" id="totalValue">¥0</div>
             <div class="kpi-change" id="totalChange">—</div>
         </div>
         <div class="kpi-card" id="cardAvg">
-            <div class="kpi-label">当月平均薪资</div>
+            <div class="kpi-label" id="kpiLabelAvg">当期月均薪资</div>
             <div class="kpi-value" id="avgValue">¥0</div>
             <div class="kpi-change" id="avgChange">—</div>
         </div>
@@ -277,23 +338,23 @@
     <div class="chart-row">
         <!-- 左侧柱状图：部门薪资 -->
         <div class="chart-card">
-            <div class="chart-title">📊 各部门薪资总额（选中月份）</div>
+            <div class="chart-title" id="barChartTitle">📊 各部门薪资总额（选中周期）</div>
             <div id="barChart" class="chart-container"></div>
         </div>
         <!-- 右侧折线图：月度趋势 -->
         <div class="chart-card">
-            <div class="chart-title">📈 各月总薪资趋势 (1月 ~ 6月)</div>
+            <div class="chart-title" id="lineChartTitle">📈 总薪资趋势</div>
             <div id="lineChart" class="chart-container"></div>
         </div>
     </div>
 
     <!-- 下方表格：月度差异汇总表（点击行联动） -->
     <div class="table-card">
-        <div class="table-title">📋 月度差异汇总表 · 点击行查看详情</div>
+        <div class="table-title" id="tableTitle">📋 差异汇总表 · 点击行选中 · 可下钻查看明细</div>
         <table id="summaryTable">
             <thead>
                 <tr>
-                    <th>月份</th>
+                    <th id="tableColPeriod">周期</th>
                     <th>总薪资 (¥)</th>
                     <th>平均薪资 (¥)</th>
                     <th>环比变化 (金额 / 百分比)</th>
@@ -388,43 +449,138 @@
         }
     }
 
+    // ----- 季度 / 半年度 / 年度 聚合 -----
+    // 季度: Q1(0,1,2) Q2(3,4,5)
+    function aggregateByMonthIndices(indices) {
+        const deptSalaries = DEPTS.map((_, dIdx) =>
+            indices.reduce((sum, mIdx) => sum + monthlyStats[mIdx].deptSalaries[dIdx], 0)
+        );
+        const total = deptSalaries.reduce((a, v) => a + v, 0);
+        const monthCount = indices.length;
+        const avg = monthCount > 0 ? total / monthCount / TOTAL_STAFF : 0;
+        return { deptSalaries, total, avg, monthIndices: indices };
+    }
+    function buildPeriodStat(periodLabel, indices, prevStat, reason) {
+        const agg = aggregateByMonthIndices(indices);
+        let changeAmount = null, changePercent = null;
+        if (prevStat) {
+            changeAmount = agg.total - prevStat.total;
+            changePercent = (changeAmount / prevStat.total) * 100;
+        }
+        return {
+            period: periodLabel,
+            monthIndices: indices,
+            deptSalaries: agg.deptSalaries,
+            total: agg.total,
+            avg: agg.avg,
+            changeAmount,
+            changePercent,
+            reason: reason || (prevStat ? '环比变化' : '基准期')
+        };
+    }
+
+    const quarterStats = [
+        buildPeriodStat('2024Q1', [0, 1, 2], null, 'Q1 汇总（1-3月）'),
+        buildPeriodStat('2024Q2', [3, 4, 5], null, 'Q2 汇总（4-6月）')
+    ];
+    const prevQ1 = quarterStats[0];
+    quarterStats[1].changeAmount = quarterStats[1].total - prevQ1.total;
+    quarterStats[1].changePercent = (quarterStats[1].changeAmount / prevQ1.total) * 100;
+    quarterStats[1].reason = quarterStats[1].changePercent >= 0
+        ? '主要因技术部调薪及销售提成带动'
+        : '主要因成本控制或结构调整';
+
+    const halfYearStats = [
+        buildPeriodStat('2024年上半年', [0, 1, 2, 3, 4, 5], null, '上半年汇总（1-6月）')
+    ];
+
+    const yearStats = [
+        buildPeriodStat('2024年', [0, 1, 2, 3, 4, 5], null, '年度汇总（1-6月数据）')
+    ];
+
+    const GRANULARITIES = { year: 'year', half: 'half', quarter: 'quarter', month: 'month' };
+    function getStatsByGranularity(gran) {
+        if (gran === GRANULARITIES.year) return yearStats;
+        if (gran === GRANULARITIES.half) return halfYearStats;
+        if (gran === GRANULARITIES.quarter) return quarterStats;
+        return monthlyStats;
+    }
+    function getPeriodLabel(stat, gran) {
+        if (gran === GRANULARITIES.month) return stat.month;
+        return stat.period;
+    }
+
     // ----- 页面元素 -----
-    const monthSelect = document.getElementById('monthSelect');
+    const periodSelect = document.getElementById('periodSelect');
     const tableBody = document.getElementById('tableBody');
     const totalValueEl = document.getElementById('totalValue');
     const totalChangeEl = document.getElementById('totalChange');
     const avgValueEl = document.getElementById('avgValue');
     const avgChangeEl = document.getElementById('avgChange');
+    const granularityTabs = document.getElementById('granularityTabs');
+    const breadcrumbEl = document.getElementById('breadcrumb');
 
     // 图表实例
     let barChart, lineChart;
 
-    // 当前选中月份索引 (默认6月索引5)
+    // 当前粒度与选中索引
+    let currentGranularity = GRANULARITIES.month;
     let currentIdx = 5;
 
-    // ----- 初始化下拉框 -----
-    function initSelect() {
-        monthSelect.innerHTML = '';
-        MONTH_LABELS.forEach((label, idx) => {
+    function getCurrentStats() { return getStatsByGranularity(currentGranularity); }
+    function getCurrentStat() {
+        const stats = getCurrentStats();
+        return stats[currentIdx];
+    }
+
+    // ----- 粒度切换时是否可下钻 -----
+    function getDrillTarget(gran, idx) {
+        if (gran === GRANULARITIES.year && (yearStats.length > 0)) return { gran: GRANULARITIES.half, idx: 0 };
+        if (gran === GRANULARITIES.half && (halfYearStats.length > 0)) return { gran: GRANULARITIES.quarter, idx: 0 };
+        if (gran === GRANULARITIES.quarter) return { gran: GRANULARITIES.month, idx: quarterStats[idx].monthIndices[0] };
+        return null;
+    }
+
+    // ----- 初始化周期下拉框 -----
+    function initPeriodSelect() {
+        const stats = getCurrentStats();
+        periodSelect.innerHTML = '';
+        stats.forEach((s, idx) => {
             const option = document.createElement('option');
             option.value = idx;
-            option.textContent = label;
+            option.textContent = getPeriodLabel(s, currentGranularity);
             if (idx === currentIdx) option.selected = true;
-            monthSelect.appendChild(option);
+            periodSelect.appendChild(option);
         });
     }
 
-    // ----- 渲染表格 (同时高亮当前行) -----
+    // ----- 面包屑 -----
+    function updateBreadcrumb() {
+        const parts = [];
+        if (currentGranularity !== GRANULARITIES.year) parts.push('<a class="link" data-gran="year">年度</a>');
+        if (currentGranularity !== GRANULARITIES.half) parts.push('<a class="link" data-gran="half">半年度</a>');
+        if (currentGranularity !== GRANULARITIES.quarter) parts.push('<a class="link" data-gran="quarter">季度</a>');
+        if (currentGranularity !== GRANULARITIES.month) parts.push('<a class="link" data-gran="month">月度</a>');
+        const stat = getCurrentStat();
+        if (stat) parts.push('<span>' + getPeriodLabel(stat, currentGranularity) + '</span>');
+        breadcrumbEl.innerHTML = parts.join(' <span>›</span> ');
+        breadcrumbEl.querySelectorAll('.link').forEach(a => {
+            a.addEventListener('click', () => setGranularity(a.dataset.gran));
+        });
+    }
+
+    // ----- 渲染表格 (按当前粒度，高亮当前行，支持下钻) -----
     function renderTable(highlightIdx) {
+        const stats = getCurrentStats();
+        const gran = currentGranularity;
         let html = '';
-        monthlyStats.forEach((stat, idx) => {
-            const month = stat.month;
+        stats.forEach((stat, idx) => {
+            const periodLabel = getPeriodLabel(stat, gran);
             const totalStr = '¥' + stat.total.toLocaleString();
             const avgStr = '¥' + stat.avg.toFixed(0).toLocaleString();
 
-            // 环比变化列
             let changeHtml = '';
-            if (idx === 0) {
+            if (stat.changeAmount == null) {
                 changeHtml = '<span class="amount-neutral">—</span>';
             } else {
                 const amount = stat.changeAmount;
@@ -434,15 +590,12 @@
                 const sign = amount >= 0 ? '+' : '';
                 changeHtml = `<span class="${amountClass} nowrap">${sign}¥${amount.toLocaleString()}</span> <span class="separator">|</span> <span class="${amountClass}">${sign}${absPercent}%</span>`;
             }
-
-            // 原因列
             const reasonHtml = `<span class="reason-text">${stat.reason}</span>`;
-
-            // 行高亮类
             const rowClass = (idx === highlightIdx) ? 'selected-row' : '';
-
-            html += `<tr class="${rowClass}" data-index="${idx}">
-                <td><strong>${month}</strong></td>
+            const canDrill = getDrillTarget(gran, idx);
+            const drillHint = canDrill ? ' title="点击下钻"' : '';
+            html += `<tr class="${rowClass}" data-index="${idx}" data-can-drill="${!!canDrill}"${drillHint}>
+                <td><strong>${periodLabel}</strong>${canDrill ? ' <span style="color:#94a3b8;font-size:0.8em">› 下钻</span>' : ''}</td>
                 <td>${totalStr}</td>
                 <td>${avgStr}</td>
                 <td>${changeHtml}</td>
@@ -451,27 +604,31 @@
         });
         tableBody.innerHTML = html;
 
-        // 给所有行绑定点击事件
         document.querySelectorAll('#tableBody tr').forEach(row => {
             row.addEventListener('click', (e) => {
                 const idx = parseInt(row.dataset.index, 10);
-                if (!isNaN(idx)) {
-                    setCurrentMonth(idx);
+                if (isNaN(idx)) return;
+                const canDrill = row.dataset.canDrill === 'true';
+                if (canDrill) {
+                    const target = getDrillTarget(currentGranularity, idx);
+                    if (target) {
+                        setGranularity(target.gran);
+                        setCurrentPeriod(target.idx);
+                        return;
+                    }
                 }
+                setCurrentPeriod(idx);
             });
         });
     }
 
-    // ----- 更新卡片和柱状图 (基于当前索引) -----
-    function updateUpperByIndex(idx) {
-        const stat = monthlyStats[idx];
-        // 当月总薪资
+    // ----- 更新卡片和柱状图 -----
+    function updateUpperByStat(stat) {
+        if (!stat) return;
         totalValueEl.innerText = '¥' + stat.total.toLocaleString();
-        // 平均薪资
         avgValueEl.innerText = '¥' + stat.avg.toFixed(0).toLocaleString();
 
-        // 环比变化卡片 (总薪资变化)
-        if (idx === 0) {
+        if (stat.changeAmount == null) {
             totalChangeEl.innerHTML = '<span class="change-neutral">——</span>';
             avgChangeEl.innerHTML = '<span class="change-neutral">——</span>';
         } else {
@@ -481,15 +638,13 @@
             const sign = amount >= 0 ? '+' : '';
             const cls = amount >= 0 ? 'change-up' : 'change-down';
             const arrow = amount >= 0 ? 'arrow-up' : 'arrow-down';
-
-            // 总薪资环比
+            const avgChangeAmount = (stat.monthIndices && stat.monthIndices.length)
+                ? amount / stat.monthIndices.length / TOTAL_STAFF
+                : amount / TOTAL_STAFF;
             totalChangeEl.innerHTML = `<span class="${cls} ${arrow}"></span> <span class="${cls}">${sign}¥${amount.toLocaleString()} (${sign}${absPercent}%)</span>`;
-
-            // 平均薪资环比（同比例）
-            avgChangeEl.innerHTML = `<span class="${cls} ${arrow}"></span> <span class="${cls}">${sign}¥${(amount/TOTAL_STAFF).toFixed(0).toLocaleString()} (${sign}${absPercent}%)</span>`;
+            avgChangeEl.innerHTML = `<span class="${cls} ${arrow}"></span> <span class="${cls}">${sign}¥${avgChangeAmount.toFixed(0).toLocaleString()} (${sign}${absPercent}%)</span>`;
         }
 
-        // 更新左侧柱状图 (部门薪资)
         if (barChart) {
             barChart.setOption({
                 xAxis: { data: DEPTS },
@@ -513,24 +668,66 @@
         }
     }
 
-    // ----- 设置当前月份 (联动所有) -----
-    function setCurrentMonth(idx) {
-        if (idx < 0 || idx >= monthlyStats.length) return;
+    // ----- 设置当前周期 (仅改选中索引，不切换粒度) -----
+    function setCurrentPeriod(idx) {
+        const stats = getCurrentStats();
+        if (idx < 0 || idx >= stats.length) return;
         currentIdx = idx;
-        // 更新下拉框选中
-        monthSelect.value = idx;
-        // 更新卡片+柱状图
-        updateUpperByIndex(idx);
-        // 重新渲染表格并高亮当前行 (同时保留点击事件)
+        periodSelect.value = idx;
+        updateUpperByStat(stats[idx]);
         renderTable(idx);
+    }
+
+    // ----- 切换粒度 -----
+    function setGranularity(gran) {
+        currentGranularity = gran;
+        currentIdx = 0;
+        granularityTabs.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.gran === gran));
+        document.getElementById('tableColPeriod').textContent = gran === GRANULARITIES.month ? '月份' : '周期';
+        document.getElementById('tableTitle').textContent = gran === GRANULARITIES.month
+            ? '📋 月度差异汇总表 · 点击行选中'
+            : '📋 差异汇总表 · 点击行选中或下钻查看明细';
+        document.getElementById('barChartTitle').textContent = '📊 各部门薪资总额（选中周期）';
+        const lineTitles = {
+            year: '📈 年度总薪资',
+            half: '📈 半年度总薪资',
+            quarter: '📈 季度总薪资趋势',
+            month: '📈 各月总薪资趋势 (1月 ~ 6月)'
+        };
+        document.getElementById('lineChartTitle').textContent = lineTitles[gran];
+        initPeriodSelect();
+        updateBreadcrumb();
+        renderTable(currentIdx);
+        updateUpperByStat(getCurrentStat());
+        updateLineChart();
+    }
+
+    // ----- 折线图按粒度更新 -----
+    function updateLineChart() {
+        if (!lineChart) return;
+        const stats = getCurrentStats();
+        const labels = stats.map(s => getPeriodLabel(s, currentGranularity));
+        const data = stats.map(s => s.total);
+        lineChart.setOption({
+            xAxis: { data: labels },
+            series: [{
+                data,
+                type: 'line',
+                smooth: false,
+                symbol: 'circle',
+                symbolSize: 8,
+                lineStyle: { width: 3, color: '#3b82f6' },
+                areaStyle: { color: 'rgba(59,130,246,0.05)' },
+                label: { show: true, position: 'top', formatter: (p) => '¥' + p.value.toLocaleString() }
+            }]
+        });
     }
 
     // ----- 初始化图表 -----
     function initCharts() {
-        // 柱状图 (部门)
         const barDom = document.getElementById('barChart');
         barChart = echarts.init(barDom);
-        const barOption = {
+        barChart.setOption({
             tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
             grid: { left: '10%', right: '5%', top: '20%', bottom: '12%', containLabel: true },
             xAxis: { type: 'category', data: DEPTS, axisLabel: { fontWeight: 500 } },
@@ -540,27 +737,21 @@
                 axisLabel: { formatter: (v) => '¥' + v.toLocaleString() }
             },
             series: []
-        };
-        barChart.setOption(barOption);
+        });
 
-        // 折线图 (总趋势)
         const lineDom = document.getElementById('lineChart');
         lineChart = echarts.init(lineDom);
-        const lineOption = {
+        lineChart.setOption({
             tooltip: { trigger: 'axis', valueFormatter: (v) => '¥' + v.toLocaleString() },
             grid: { left: '10%', right: '5%', top: '18%', bottom: '12%' },
-            xAxis: { 
-                type: 'category', 
-                data: MONTH_LABELS,
-                axisLabel: { fontWeight: 500 }
-            },
+            xAxis: { type: 'category', data: [], axisLabel: { fontWeight: 500 } },
             yAxis: { 
                 type: 'value', 
                 name: '总薪资 (元)',
                 axisLabel: { formatter: (v) => '¥' + v.toLocaleString() }
             },
             series: [{
-                data: monthlyStats.map(s => s.total),
+                data: [],
                 type: 'line',
                 smooth: false,
                 symbol: 'circle',
@@ -569,29 +760,32 @@
                 areaStyle: { color: 'rgba(59,130,246,0.05)' },
                 label: { show: true, position: 'top', formatter: (p) => '¥' + p.value.toLocaleString() }
             }]
-        };
-        lineChart.setOption(lineOption);
+        });
 
-        // 窗口resize
         window.addEventListener('resize', () => {
             barChart.resize();
             lineChart.resize();
         });
     }
 
-    // ----- 事件绑定：下拉框change -----
-    monthSelect.addEventListener('change', (e) => {
+    periodSelect.addEventListener('change', (e) => {
         const idx = parseInt(e.target.value, 10);
-        setCurrentMonth(idx);
+        setCurrentPeriod(idx);
+    });
+
+    granularityTabs.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => setGranularity(tab.dataset.gran));
     });
 
     // ----- 启动 -----
-    initSelect();
+    document.getElementById('tableColPeriod').textContent = '月份';
+    document.getElementById('tableTitle').textContent = '📋 月度差异汇总表 · 点击行选中';
+    initPeriodSelect();
     initCharts();
-    // 渲染表格并高亮默认月份 (5)
+    updateBreadcrumb();
     renderTable(currentIdx);
-    // 更新卡片柱状图
-    updateUpperByIndex(currentIdx);
+    updateUpperByStat(getCurrentStat());
+    updateLineChart();
 })();
 </script>
 </body>
