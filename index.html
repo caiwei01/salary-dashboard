@@ -205,6 +205,45 @@
             height: 260px;
         }
 
+        /* 薪资构成占比 */
+        .composition-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .composition-card {
+            background: white;
+            border-radius: 20px;
+            padding: 18px 16px 12px 16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+            border: 1px solid #f0f2f5;
+        }
+        .composition-table {
+            width: 100%;
+            font-size: 0.9rem;
+            border-collapse: collapse;
+        }
+        .composition-table th {
+            text-align: left;
+            padding: 10px 8px;
+            color: #64748b;
+            font-weight: 500;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .composition-table td {
+            padding: 10px 8px;
+            border-bottom: 1px solid #f1f5f9;
+            color: #334155;
+        }
+        .composition-table .pct {
+            font-weight: 600;
+            color: #0284c7;
+        }
+        @media (max-width: 1000px) {
+            .composition-section { grid-template-columns: 1fr; }
+        }
+
         /* 表格区域 */
         .table-card {
             background: white;
@@ -294,7 +333,7 @@
     <div class="header">
         <div class="title-section">
             <h1>公司员工薪资看板</h1>
-            <div class="subtitle">多粒度差异分析及原因总结 · 总人数 54 人 · 5 个部门</div>
+            <div class="subtitle" id="subtitle">多粒度差异分析及薪资构成 · 人数变动 · 5 个部门</div>
         </div>
         <div class="header-actions">
             <div class="month-selector">
@@ -322,10 +361,10 @@
             <div class="kpi-value" id="avgValue">¥0</div>
             <div class="kpi-change" id="avgChange">—</div>
         </div>
-        <div class="kpi-card">
-            <div class="kpi-label">员工总数</div>
-            <div class="kpi-value">54</div>
-            <div class="kpi-change change-neutral">固定人数</div>
+        <div class="kpi-card" id="cardStaff">
+            <div class="kpi-label">当期人数</div>
+            <div class="kpi-value" id="staffValue">—</div>
+            <div class="kpi-change" id="staffChange">—</div>
         </div>
         <div class="kpi-card">
             <div class="kpi-label">当月部门数</div>
@@ -348,6 +387,23 @@
         </div>
     </div>
 
+    <!-- 薪资构成占比 -->
+    <div class="composition-section">
+        <div class="composition-card">
+            <div class="chart-title">🥧 薪资构成占比（选中周期）</div>
+            <div id="pieChart" class="chart-container" style="height:280px"></div>
+        </div>
+        <div class="composition-card">
+            <div class="chart-title">📋 各项金额与占比</div>
+            <div class="chart-container" style="height:280px; overflow:auto">
+                <table class="composition-table" id="compositionTable">
+                    <thead><tr><th>项目</th><th>金额 (¥)</th><th>占比</th></tr></thead>
+                    <tbody id="compositionBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
     <!-- 下方表格：月度差异汇总表（点击行联动） -->
     <div class="table-card">
         <div class="table-title" id="tableTitle">📋 差异汇总表 · 点击行选中 · 可下钻查看明细</div>
@@ -355,6 +411,7 @@
             <thead>
                 <tr>
                     <th id="tableColPeriod">周期</th>
+                    <th>人数</th>
                     <th>总薪资 (¥)</th>
                     <th>平均薪资 (¥)</th>
                     <th>环比变化 (金额 / 百分比)</th>
@@ -370,102 +427,108 @@
 
 <script>
 (function() {
-    // ----- 固定数据配置 -----
     const DEPTS = ['销售部', '技术部', '市场部', '人事部', '财务部'];
-    const STAFF_COUNTS = [15, 20, 8, 5, 6];   // 各部门人数
-    const TOTAL_STAFF = 54;
+    // 薪资构成项 key -> 中文名
+    const COMPONENT_KEYS = ['basic', 'position', 'performance', 'socialInsurance', 'commission', 'bonus', 'severance'];
+    const COMPONENT_NAMES = { basic: '基础工资', position: '岗位工资', performance: '绩效工资', socialInsurance: '社保', commission: '提成', bonus: '奖金', severance: '经济补偿金' };
 
-    // 月份标签
-    const MONTH_LABELS = ['2024-01', '2024-02', '2024-03', '2024-04', '2024-05', '2024-06'];
+    // 生成 2024-01 ~ 2025-12 共24个月
+    const MONTH_LABELS = [];
+    for (let y = 2024; y <= 2025; y++) for (let m = 1; m <= 12; m++) MONTH_LABELS.push(y + '-' + String(m).padStart(2, '0'));
 
-    // ----- 手工构造各部门月度薪资 (单位:元) 符合规律 -----
-    // 每行: [销售部, 技术部, 市场部, 人事部, 财务部]
-    const RAW_DEPT_SALARIES = [
-        [180000, 240000,  88000,  50000,  60000], // 1月
-        [196200, 264000,  97680,  54000,  65400], // 2月 (春节+9~11%)
-        [194238, 269280,  97680,  54540,  66054], // 3月 (微调)
-        [196180, 304286,  98168,  54813,  66384], // 4月 (技术调薪+13%)
-        [194218, 307229,  99150,  54539,  67048], // 5月 (波动)
-        [215582, 310301, 100142,  55084,  67718]  // 6月 (销售提成+11%)
-    ];
+    // 每月人数：54 逐步减少，2025年底约 42 人
+    function getStaffCount(idx) {
+        if (idx < 6) return 54;
+        if (idx < 12) return 54 - Math.floor((idx - 5) / 2);  // 52,51,50...
+        return Math.max(42, 52 - (idx - 12));  // 2025 继续下降
+    }
 
-    // 预计算每月汇总数据
+    // 基准总薪资（元），逐月下降趋势：约 618k -> 约 480k
+    function getBaseTotal(idx) {
+        const start = 618000, end = 480000;
+        const t = idx / Math.max(1, MONTH_LABELS.length - 1);
+        return Math.round(start + (end - start) * t);
+    }
+
+    // 每月薪资构成占比（略波动），总和 100%
+    function getComponentRatios(idx) {
+        const base = { basic: 0.38, position: 0.24, performance: 0.14, socialInsurance: 0.09, commission: 0.06, bonus: 0.07, severance: 0.02 };
+        const r = { ...base };
+        r.basic += (idx % 3 - 1) * 0.01;
+        r.commission += (idx % 4 === 0 ? 0.02 : 0);
+        r.severance = idx === 11 || idx === 23 ? 0.04 : 0.02;  // 年终/裁员月略高
+        const sum = Object.values(r).reduce((a, v) => a + v, 0);
+        Object.keys(r).forEach(k => r[k] /= sum);
+        return r;
+    }
+
+    // 各部门占比（用于拆分 deptSalaries）
+    const DEPT_RATIOS = [0.29, 0.36, 0.16, 0.09, 0.10];
+
     const monthlyStats = MONTH_LABELS.map((month, idx) => {
-        const deptVals = RAW_DEPT_SALARIES[idx];
-        const total = deptVals.reduce((acc, v) => acc + v, 0);
-        const avg = total / TOTAL_STAFF;
+        const staffCount = getStaffCount(idx);
+        const total = getBaseTotal(idx);
+        const ratios = getComponentRatios(idx);
+        const components = {};
+        COMPONENT_KEYS.forEach(k => { components[k] = Math.round(total * ratios[k]); });
+        const adj = total - Object.values(components).reduce((a, v) => a + v, 0);
+        components.basic += adj;
+        const deptSalaries = DEPT_RATIOS.map(r => Math.round(total * r));
+        const deptAdj = total - deptSalaries.reduce((a, v) => a + v, 0);
+        deptSalaries[0] += deptAdj;
+        const avg = staffCount > 0 ? total / staffCount : 0;
         return {
             month,
-            deptSalaries: [...deptVals],
+            staffCount,
+            deptSalaries,
             total,
             avg,
-            changeAmount: null,   // 待计算
+            components,
+            changeAmount: null,
             changePercent: null,
             reason: ''
         };
     });
 
-    // 计算环比变化、原因 (从索引0开始, 0没有上月)
     for (let i = 0; i < monthlyStats.length; i++) {
         if (i === 0) {
-            monthlyStats[i].changeAmount = null;
-            monthlyStats[i].changePercent = null;
             monthlyStats[i].reason = '初始月份';
         } else {
-            const prev = monthlyStats[i-1];
+            const prev = monthlyStats[i - 1];
             const curr = monthlyStats[i];
             const amount = curr.total - prev.total;
-            const percent = (amount / prev.total) * 100;
+            const percent = prev.total ? (amount / prev.total) * 100 : 0;
             curr.changeAmount = amount;
             curr.changePercent = percent;
-
-            // 生成动态原因：找出对变化贡献最大的部门（涨幅最大或降幅最大）
-            const deptChanges = curr.deptSalaries.map((sal, dIdx) => {
-                const prevSal = prev.deptSalaries[dIdx];
-                return {
-                    dept: DEPTS[dIdx],
-                    change: sal - prevSal,
-                    changePct: ((sal - prevSal) / prevSal) * 100
-                };
-            });
-
-            // 根据整体涨跌方向选择关注点：整体上涨找涨幅最大，下跌找降幅最大，平稳则平稳描述
-            const threshold = 1.0; // 1% 以内视为平稳
-            if (Math.abs(percent) < threshold) {
-                curr.reason = '各部门薪资总体平稳';
-            } else if (percent > 0) {
-                // 上涨：找涨幅最大的部门
-                const maxUp = deptChanges.reduce((max, d) => (d.changePct > max.changePct ? d : max), deptChanges[0]);
-                let extra = '';
-                if (i === 1 && maxUp.dept === '市场部') extra = '（春节奖金）';
-                else if (i === 3 && maxUp.dept === '技术部') extra = '（技术调薪）';
-                else if (i === 5 && maxUp.dept === '销售部') extra = '（销售提成）';
-                curr.reason = `主要由于 ${maxUp.dept} 薪资上涨 ${maxUp.changePct.toFixed(2)}%${extra}`;
-            } else {
-                // 下跌：找降幅最大的部门
-                const minDown = deptChanges.reduce((min, d) => (d.changePct < min.changePct ? d : min), deptChanges[0]);
-                curr.reason = `主要由于 ${minDown.dept} 薪资下降 ${Math.abs(minDown.changePct).toFixed(2)}% （成本/调整）`;
-            }
+            const threshold = 1.0;
+            if (Math.abs(percent) < threshold) curr.reason = '薪资与人数总体平稳';
+            else if (percent < 0) curr.reason = '人数减少及薪酬调整导致总薪资下降';
+            else curr.reason = '季节性奖金或提成增加';
         }
     }
 
-    // ----- 季度 / 半年度 / 年度 聚合 -----
-    // 季度: Q1(0,1,2) Q2(3,4,5)
     function aggregateByMonthIndices(indices) {
         const deptSalaries = DEPTS.map((_, dIdx) =>
             indices.reduce((sum, mIdx) => sum + monthlyStats[mIdx].deptSalaries[dIdx], 0)
         );
         const total = deptSalaries.reduce((a, v) => a + v, 0);
         const monthCount = indices.length;
-        const avg = monthCount > 0 ? total / monthCount / TOTAL_STAFF : 0;
-        return { deptSalaries, total, avg, monthIndices: indices };
+        const staffSum = indices.reduce((s, mIdx) => s + monthlyStats[mIdx].staffCount, 0);
+        const avgStaff = monthCount > 0 ? staffSum / monthCount : 0;
+        const avg = avgStaff > 0 ? total / monthCount / avgStaff : 0;
+        const components = {};
+        COMPONENT_KEYS.forEach(k => {
+            components[k] = indices.reduce((s, mIdx) => s + monthlyStats[mIdx].components[k], 0);
+        });
+        return { deptSalaries, total, avg, monthIndices: indices, components, avgStaff: Math.round(avgStaff) };
     }
+
     function buildPeriodStat(periodLabel, indices, prevStat, reason) {
         const agg = aggregateByMonthIndices(indices);
         let changeAmount = null, changePercent = null;
         if (prevStat) {
             changeAmount = agg.total - prevStat.total;
-            changePercent = (changeAmount / prevStat.total) * 100;
+            changePercent = prevStat.total ? (changeAmount / prevStat.total) * 100 : 0;
         }
         return {
             period: periodLabel,
@@ -473,30 +536,53 @@
             deptSalaries: agg.deptSalaries,
             total: agg.total,
             avg: agg.avg,
+            components: agg.components,
+            avgStaff: agg.avgStaff,
             changeAmount,
             changePercent,
             reason: reason || (prevStat ? '环比变化' : '基准期')
         };
     }
 
-    const quarterStats = [
-        buildPeriodStat('2024Q1', [0, 1, 2], null, 'Q1 汇总（1-3月）'),
-        buildPeriodStat('2024Q2', [3, 4, 5], null, 'Q2 汇总（4-6月）')
-    ];
-    const prevQ1 = quarterStats[0];
-    quarterStats[1].changeAmount = quarterStats[1].total - prevQ1.total;
-    quarterStats[1].changePercent = (quarterStats[1].changeAmount / prevQ1.total) * 100;
-    quarterStats[1].reason = quarterStats[1].changePercent >= 0
-        ? '主要因技术部调薪及销售提成带动'
-        : '主要因成本控制或结构调整';
+    const quarterStats = [];
+    for (let y = 2024; y <= 2025; y++) {
+        for (let q = 1; q <= 4; q++) {
+            const start = (y - 2024) * 12 + (q - 1) * 3;
+            const indices = [start, start + 1, start + 2];
+            const label = y + 'Q' + q;
+            const prev = quarterStats.length ? quarterStats[quarterStats.length - 1] : null;
+            quarterStats.push(buildPeriodStat(label, indices, prev, label + ' 汇总'));
+        }
+    }
+    for (let i = 1; i < quarterStats.length; i++) {
+        const prev = quarterStats[i - 1];
+        quarterStats[i].changeAmount = quarterStats[i].total - prev.total;
+        quarterStats[i].changePercent = prev.total ? (quarterStats[i].changeAmount / prev.total) * 100 : 0;
+        quarterStats[i].reason = quarterStats[i].changePercent >= 0 ? '季度环比上升' : '人数减少及薪酬收缩';
+    }
 
-    const halfYearStats = [
-        buildPeriodStat('2024年上半年', [0, 1, 2, 3, 4, 5], null, '上半年汇总（1-6月）')
-    ];
+    const halfYearStats = [];
+    [[2024, 1], [2024, 2], [2025, 1], [2025, 2]].forEach(([y, h]) => {
+        const start = (y - 2024) * 12 + (h - 1) * 6;
+        const indices = [start, start + 1, start + 2, start + 3, start + 4, start + 5];
+        const label = y + '年' + (h === 1 ? '上半年' : '下半年');
+        const prev = halfYearStats.length ? halfYearStats[halfYearStats.length - 1] : null;
+        halfYearStats.push(buildPeriodStat(label, indices, prev, label + ' 汇总'));
+    });
+    for (let i = 1; i < halfYearStats.length; i++) {
+        const prev = halfYearStats[i - 1];
+        halfYearStats[i].changeAmount = halfYearStats[i].total - prev.total;
+        halfYearStats[i].changePercent = prev.total ? (halfYearStats[i].changeAmount / prev.total) * 100 : 0;
+        halfYearStats[i].reason = halfYearStats[i].changePercent >= 0 ? '半年度环比上升' : '人员优化及薪资下调';
+    }
 
     const yearStats = [
-        buildPeriodStat('2024年', [0, 1, 2, 3, 4, 5], null, '年度汇总（1-6月数据）')
+        buildPeriodStat('2024年', Array.from({ length: 12 }, (_, i) => i), null, '2024全年'),
+        buildPeriodStat('2025年', Array.from({ length: 12 }, (_, i) => 12 + i), null, '2025全年')
     ];
+    yearStats[1].changeAmount = yearStats[1].total - yearStats[0].total;
+    yearStats[1].changePercent = yearStats[0].total ? (yearStats[1].changeAmount / yearStats[0].total) * 100 : 0;
+    yearStats[1].reason = yearStats[1].changePercent >= 0 ? '年度同比上升' : '人员精简与薪酬控制';
 
     const GRANULARITIES = { year: 'year', half: 'half', quarter: 'quarter', month: 'month' };
     function getStatsByGranularity(gran) {
@@ -520,12 +606,13 @@
     const granularityTabs = document.getElementById('granularityTabs');
     const breadcrumbEl = document.getElementById('breadcrumb');
 
-    // 图表实例
-    let barChart, lineChart;
+    let barChart, lineChart, pieChart;
+    const staffValueEl = document.getElementById('staffValue');
+    const staffChangeEl = document.getElementById('staffChange');
+    const compositionBody = document.getElementById('compositionBody');
 
-    // 当前粒度与选中索引
     let currentGranularity = GRANULARITIES.month;
-    let currentIdx = 5;
+    let currentIdx = 23;
 
     function getCurrentStats() { return getStatsByGranularity(currentGranularity); }
     function getCurrentStat() {
@@ -533,11 +620,10 @@
         return stats[currentIdx];
     }
 
-    // ----- 粒度切换时是否可下钻 -----
     function getDrillTarget(gran, idx) {
-        if (gran === GRANULARITIES.year && (yearStats.length > 0)) return { gran: GRANULARITIES.half, idx: 0 };
-        if (gran === GRANULARITIES.half && (halfYearStats.length > 0)) return { gran: GRANULARITIES.quarter, idx: 0 };
-        if (gran === GRANULARITIES.quarter) return { gran: GRANULARITIES.month, idx: quarterStats[idx].monthIndices[0] };
+        if (gran === GRANULARITIES.year && yearStats.length > 0) return { gran: GRANULARITIES.half, idx: idx === 0 ? 0 : 2 };
+        if (gran === GRANULARITIES.half && halfYearStats.length > 0) return { gran: GRANULARITIES.quarter, idx: idx * 2 };
+        if (gran === GRANULARITIES.quarter && quarterStats[idx]) return { gran: GRANULARITIES.month, idx: quarterStats[idx].monthIndices[0] };
         return null;
     }
 
@@ -594,8 +680,10 @@
             const rowClass = (idx === highlightIdx) ? 'selected-row' : '';
             const canDrill = getDrillTarget(gran, idx);
             const drillHint = canDrill ? ' title="点击下钻"' : '';
+            const staffNum = getStatStaff(stat);
             html += `<tr class="${rowClass}" data-index="${idx}" data-can-drill="${!!canDrill}"${drillHint}>
                 <td><strong>${periodLabel}</strong>${canDrill ? ' <span style="color:#94a3b8;font-size:0.8em">› 下钻</span>' : ''}</td>
+                <td>${staffNum}</td>
                 <td>${totalStr}</td>
                 <td>${avgStr}</td>
                 <td>${changeHtml}</td>
@@ -622,15 +710,46 @@
         });
     }
 
-    // ----- 更新卡片和柱状图 -----
+    function getStatStaff(stat) {
+        return stat.staffCount != null ? stat.staffCount : (stat.avgStaff != null ? stat.avgStaff : 0);
+    }
+
+    function updateComposition(stat) {
+        if (!stat || !stat.components) return;
+        const total = stat.total;
+        const items = COMPONENT_KEYS.map(k => ({
+            name: COMPONENT_NAMES[k],
+            value: stat.components[k] || 0,
+            pct: total ? ((stat.components[k] || 0) / total * 100).toFixed(1) : '0'
+        })).filter(x => x.value > 0);
+        if (pieChart) {
+            pieChart.setOption({
+                tooltip: { trigger: 'item', formatter: '{b}: ¥{c} ({d}%)' },
+                series: [{
+                    type: 'pie',
+                    radius: ['40%', '70%'],
+                    center: ['50%', '50%'],
+                    data: items.map((x, i) => ({ name: x.name, value: x.value, itemStyle: { color: ['#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452'][i % 7] } })),
+                    label: { formatter: '{b} {d}%' }
+                }]
+            });
+        }
+        compositionBody.innerHTML = items.map(x =>
+            `<tr><td>${x.name}</td><td>¥${x.value.toLocaleString()}</td><td class="pct">${x.pct}%</td></tr>`
+        ).join('');
+    }
+
     function updateUpperByStat(stat) {
         if (!stat) return;
         totalValueEl.innerText = '¥' + stat.total.toLocaleString();
+        const staff = getStatStaff(stat);
         avgValueEl.innerText = '¥' + stat.avg.toFixed(0).toLocaleString();
+        staffValueEl.innerText = staff;
 
         if (stat.changeAmount == null) {
             totalChangeEl.innerHTML = '<span class="change-neutral">——</span>';
             avgChangeEl.innerHTML = '<span class="change-neutral">——</span>';
+            staffChangeEl.innerHTML = '<span class="change-neutral">——</span>';
         } else {
             const amount = stat.changeAmount;
             const percent = stat.changePercent;
@@ -639,10 +758,11 @@
             const cls = amount >= 0 ? 'change-up' : 'change-down';
             const arrow = amount >= 0 ? 'arrow-up' : 'arrow-down';
             const avgChangeAmount = (stat.monthIndices && stat.monthIndices.length)
-                ? amount / stat.monthIndices.length / TOTAL_STAFF
-                : amount / TOTAL_STAFF;
+                ? amount / stat.monthIndices.length / Math.max(1, staff)
+                : amount / Math.max(1, staff);
             totalChangeEl.innerHTML = `<span class="${cls} ${arrow}"></span> <span class="${cls}">${sign}¥${amount.toLocaleString()} (${sign}${absPercent}%)</span>`;
             avgChangeEl.innerHTML = `<span class="${cls} ${arrow}"></span> <span class="${cls}">${sign}¥${avgChangeAmount.toFixed(0).toLocaleString()} (${sign}${absPercent}%)</span>`;
+            staffChangeEl.innerHTML = '<span class="change-neutral">人数变动</span>';
         }
 
         if (barChart) {
@@ -666,6 +786,7 @@
                 }]
             });
         }
+        updateComposition(stat);
     }
 
     // ----- 设置当前周期 (仅改选中索引，不切换粒度) -----
@@ -692,7 +813,7 @@
             year: '📈 年度总薪资',
             half: '📈 半年度总薪资',
             quarter: '📈 季度总薪资趋势',
-            month: '📈 各月总薪资趋势 (1月 ~ 6月)'
+            month: '📈 各月总薪资趋势 (2024-2025)'
         };
         document.getElementById('lineChartTitle').textContent = lineTitles[gran];
         initPeriodSelect();
@@ -739,6 +860,12 @@
             series: []
         });
 
+        const pieDom = document.getElementById('pieChart');
+        if (pieDom) {
+            pieChart = echarts.init(pieDom);
+            pieChart.setOption({ series: [{ type: 'pie', radius: ['40%', '70%'], data: [] }] });
+        }
+
         const lineDom = document.getElementById('lineChart');
         lineChart = echarts.init(lineDom);
         lineChart.setOption({
@@ -765,6 +892,7 @@
         window.addEventListener('resize', () => {
             barChart.resize();
             lineChart.resize();
+            if (pieChart) pieChart.resize();
         });
     }
 
